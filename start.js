@@ -7,6 +7,17 @@
 const fs = require("fs");
 const path = require("path");
 const pino = require("pino");
+
+// Persistance Firebase des fichiers JSON (survit au disque éphémère Render).
+// Écrit sur disque + sauvegarde immédiate (best-effort) vers Firebase.
+let _jsonStore = null;
+function persistData(file, data) {
+  fs.writeFileSync(file, JSON.stringify(data, null, 2));
+  try {
+    if (_jsonStore === null) { try { _jsonStore = require('./DataBase/jsonStore'); } catch (e) { _jsonStore = false; } }
+    if (_jsonStore) _jsonStore.backupFile(file).catch(() => {});
+  } catch (e) { /* best-effort */ }
+}
 const qrcode = require("qrcode-terminal");
 const QRCode = require("qrcode"); // Pour générer QR en image web
 
@@ -1383,7 +1394,7 @@ async function startBot() {
                 }
               }
               
-              fs.writeFileSync(notifFile, JSON.stringify(notifications, null, 2));
+              persistData(notifFile, notifications);
               console.log(`[NOTIF] ✅ ${pending.length} notification(s) envoyée(s) à l'owner`);
             }
           }
@@ -2636,7 +2647,7 @@ app.post('/api/wave/subscribe', (req, res) => {
     };
     
     requests.push(request);
-    fs.writeFileSync(requestsFile, JSON.stringify(requests, null, 2));
+    persistData(requestsFile, requests);
     
     console.log(`[WAVE] 📝 Nouvelle demande: ${name} - ${plan} - Réf: ${paymentRef}`);
     
@@ -2714,7 +2725,7 @@ app.post('/api/wave/confirm', async (req, res) => {
     };
     
     pending.push(request);
-    fs.writeFileSync(pendingFile, JSON.stringify(pending, null, 2));
+    persistData(pendingFile, pending);
     
     // Logger la demande
     console.log(`\n[WAVE] 🔔 ═══════════════════════════════════════════`);
@@ -2769,7 +2780,7 @@ app.post('/api/wave/confirm', async (req, res) => {
           createdAt: new Date().toISOString(),
           sent: false
         });
-        fs.writeFileSync(notifFile, JSON.stringify(notifications, null, 2));
+        persistData(notifFile, notifications);
       }
     } catch (notifError) {
       console.error('[WAVE] Erreur notification owner:', notifError.message);
@@ -2851,7 +2862,7 @@ app.post('/api/free/activate', (req, res) => {
       usedAt: null,
       source: 'free_launch'
     };
-    fs.writeFileSync(premiumCodesFile, JSON.stringify(premiumCodes, null, 2));
+    persistData(premiumCodesFile, premiumCodes);
 
     // Sauvegarder dans activation_codes.json aussi
     const codesFile = path.join(__dirname, 'DataBase', 'activation_codes.json');
@@ -2868,7 +2879,7 @@ app.post('/api/free/activate', (req, res) => {
       usedBy: null,
       source: 'free_launch'
     };
-    fs.writeFileSync(codesFile, JSON.stringify(codes, null, 2));
+    persistData(codesFile, codes);
 
     // Logger
     console.log(`\n[FREE] 🎁 ═══════════════════════════════════════════`);
@@ -3241,7 +3252,7 @@ function readPendingPayments() {
 }
 
 function savePendingPayments(arr) {
-  fs.writeFileSync(PENDING_FILE, JSON.stringify(arr, null, 2));
+  persistData(PENDING_FILE, arr);
 }
 
 // Lister les paiements en attente (admin)
@@ -3456,6 +3467,18 @@ app.listen(port, '0.0.0.0', () => {
       }
     } catch (e) {
       console.log('[DB] ⚠️ MySQL non disponible:', e.message, '— mode JSON local');
+    }
+  }
+
+  // Restaurer puis auto-sauvegarder tous les fichiers JSON (paiements, codes,
+  // abonnés, premium, économie…) vers Firebase — survit au disque éphémère.
+  if (dbConnected) {
+    try {
+      const jsonStore = require('./DataBase/jsonStore');
+      await jsonStore.restoreAll();
+      jsonStore.startAutoBackup();
+    } catch (e) {
+      console.log('[JSONSTORE] ⚠️ Persistance JSON indisponible:', e.message);
     }
   }
 
